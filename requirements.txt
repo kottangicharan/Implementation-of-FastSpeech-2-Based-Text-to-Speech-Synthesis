@@ -1,0 +1,22 @@
+# PyTorch with CUDA: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+torch>=2.1
+torchaudio>=2.1
+g2p-en
+inflect
+librosa>=0.10
+matplotlib
+numpy
+pyworld
+pyyaml
+scikit-learn
+scipy
+soundfile
+tensorboard
+tgt
+tqdm
+unidecode
+datasets>=2.18
+huggingface_hub
+num2words
+# Montreal Forced Aligner lives in a separate conda env:
+#   conda create -n mfa -c conda-forge montreal-forced-aligner

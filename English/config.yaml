@@ -1,0 +1,103 @@
+# FastSpeech 2 - English (Svarah). Paths are relative to project/FastSpeech2/.
+
+preprocess:
+  dataset: "Svarah"
+  path:
+    corpus_path: "ai4bharat/Svarah"              # HuggingFace (gated: accept terms + `hf auth login`)
+    lexicon_path: "lexicon/librispeech-lexicon.txt"
+    raw_path: "../data/English/raw"
+    preprocessed_path: "../data/English/preprocessed"
+  preprocessing:
+    selection:
+      split: "test"          # Svarah ships a single split
+      total_hours: 6.0       # 5 h train + 1 h val, random utterances (seed 1234)
+      val_hours: 1.0
+      min_sec: 1.5           # very short / long clips align poorly
+      max_sec: 10.0
+    text:
+      text_cleaners: ["english_cleaners"]
+      language: "en"
+    audio:
+      sampling_rate: 22050   # Svarah is 16 kHz -> upsampled; mel_fmax 8 kHz = its Nyquist
+      max_wav_value: 32768.0
+    stft:
+      filter_length: 1024
+      hop_length: 256
+      win_length: 1024
+    mel:
+      n_mel_channels: 80
+      mel_fmin: 0
+      mel_fmax: 8000
+    pitch:
+      feature: "phoneme_level"
+      normalization: True
+    energy:
+      feature: "phoneme_level"
+      normalization: True
+
+model:
+  transformer:
+    encoder_layer: 4
+    encoder_head: 2
+    encoder_hidden: 256
+    decoder_layer: 6
+    decoder_head: 2
+    decoder_hidden: 256
+    conv_filter_size: 1024
+    conv_kernel_size: [9, 1]
+    encoder_dropout: 0.2
+    decoder_dropout: 0.2
+  variance_predictor:
+    filter_size: 256
+    kernel_size: 3
+    dropout: 0.5
+  variance_embedding:
+    pitch_quantization: "linear"
+    energy_quantization: "linear"
+    n_bins: 256
+  multi_speaker: True        # Svarah has ~117 speakers -> speaker embedding
+  max_seq_len: 1000
+  vocoder:
+    model: "HiFi-GAN"
+    speaker: "universal"
+
+train:
+  path:
+    ckpt_path: "../English/checkpoints"
+    log_path: "../English/logs"
+    result_path: "../English/logs/synth"
+  optimizer:
+    batch_size: 16
+    betas: [0.9, 0.98]
+    eps: 0.000000001
+    weight_decay: 0.0
+    grad_clip_thresh: 1.0
+    grad_acc_step: 1
+    warm_up_step: 4000
+    anneal_steps: [25000, 32000, 37000]   # scaled down from 300k/400k/500k for the 40k budget
+    anneal_rate: 0.3
+  step:
+    total_step: 40000
+    log_step: 100
+    synth_step: 2000
+    val_step: 1000
+    save_step: 5000
+
+mfa:
+  conda: "$USERPROFILE/miniforge3/Scripts/conda.exe"
+  env: "mfa"
+  commands:
+    - [model, download, acoustic, english_us_arpa]
+    - [model, download, dictionary, english_us_arpa]
+    # own temp dir: MFA names its work dir after the corpus folder ("raw"), which collides with Telugu's run
+    - [align, ../data/English/raw, english_us_arpa, english_us_arpa, ../data/English/preprocessed/TextGrid, --clean, -j, 4, -t, ../data/English/mfa_tmp]
+
+inference:
+  speaker: "most_data"       # or any name from speakers.json (override with --speaker)
+  results_dir: "../Results/English"
+  test_sentences:
+    E1: "The antidisestablishmentarianism movement gained considerable momentum during the parliamentary proceedings."
+    E2a: "The orchestra's conduct during the ceremony was praised by the audience."
+    E2b: "The researchers will conduct an experiment to evaluate the proposed method."
+    E3: "The rhyth m of the orchestra changed unexpectedly."
+    E4: "The meeting will start at 10:45 AM on 12 November 2026, so andaroo should arrive on time."

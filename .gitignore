@@ -1,0 +1,11 @@
+.venv/
+data/
+__pycache__/
+.vscode/
+*/logs/synth/
+FastSpeech2/hifigan/*.pth.tar
+# checkpoints are 399 MB each (model + Adam state): download link in README
+*/checkpoints/*.pth.tar
+# upstream sample metadata and the unused LJSpeech vocoder
+FastSpeech2/preprocessed_data/
+FastSpeech2/hifigan/generator_LJSpeech*

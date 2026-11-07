@@ -1,0 +1,37 @@
+speaker: MNepali_d270fa
+checkpoint: 10000
+
+E1
+  input:      The antidisestablishmentarianism movement gained considerable momentum during the parliamentary proceedings.
+  normalized: The antidisestablishmentarianism movement gained considerable momentum during the parliamentary proceedings.
+  phones:     DH AH0 AE2 N T AY0 D IH0 S AH0 S T AE2 B L IH0 SH M AH0 N T EH1 R IY0 AH0 N IH0 Z AH0 M M UW1 V M AH0 N T G EY1 N D K AH0 N S IH1 D ER0 AH0 B AH0 L M OW0 M EH1 N T AH0 M D UH1 R IH0 NG DH AH0 P AA2 R L AH0 M EH1 N T ER0 IY0 P R OW0 S IY1 D IH0 NG Z
+  durations:  4 6 6 9 3 7 4 4 4 5 6 7 7 5 4 3 9 6 4 7 4 4 2 9 4 5 3 4 5 7 4 7 5 6 7 5 8 4 8 4 9 3 5 6 7 3 5 6 4 8 1 8 9 7 7 3 10 5 6 6 5 3 5 3 8 3 4 9 3 5 8 4 8 3 6 5 5 4 8 2 6 8 8 5 3 10 18
+  seconds:    5.71
+
+E2a
+  input:      The orchestra's conduct during the ceremony was praised by the audience.
+  normalized: The orchestra's conduct during the ceremony was praised by the audience.
+  phones:     DH AH0 AO1 R K AH0 S T R AH0 Z K AA1 N D AH0 K T D UH1 R IH0 NG DH AH0 S EH1 R AH0 M OW2 N IY0 W AA1 Z P R EY1 Z D B AY1 DH AH0 AA1 D IY0 AH0 N S
+  durations:  3 3 9 4 7 6 7 6 3 5 5 6 4 9 3 4 8 3 7 3 3 4 7 3 4 11 4 4 4 8 5 5 6 5 8 7 9 3 8 4 13 3 7 5 6 6 8 6 6 10 17
+  seconds:    3.53
+
+E2b
+  input:      The researchers will conduct an experiment to evaluate the proposed method.
+  normalized: The researchers will conduct an experiment to evaluate the proposed method.
+  phones:     DH AH0 R IY1 S ER0 CH ER0 Z W IH1 L K AA0 N D AH1 K T AE1 N IH0 K S P EH1 R AH0 M AH0 N T T UW1 IH0 V AE1 L Y UW0 EY2 T DH AH0 P R AH0 P OW1 Z D M EH1 TH AH0 D
+  durations:  3 3 2 7 5 5 8 6 7 5 4 5 10 4 7 4 4 14 3 9 8 3 6 4 8 3 3 3 8 5 7 4 3 4 4 7 6 7 3 3 6 8 3 4 11 3 4 6 8 7 7 5 3 6 6 10
+  seconds:    3.61
+
+E3
+  input:      The rhyth m of the orchestra changed unexpectedly.
+  normalized: The rhyth m of the orchestra changed unexpectedly.
+  phones:     DH AH0 R AY1 DH EH1 M AH1 V DH AH0 AO1 R K AH0 S T R AH0 CH EY1 N JH D AH2 N IH0 K S P EH1 K T IH0 D L IY0
+  durations:  3 3 7 19 9 6 8 5 9 4 6 7 6 7 5 6 5 3 4 11 9 4 7 4 5 5 4 6 7 7 3 13 4 6 5 3 20
+  seconds:    2.84
+
+E4
+  input:      The meeting will start at 10:45 AM on 12 November 2026, so andaroo should arrive on time.
+  normalized: The meeting will start at ten forty five ay em on twelfth November twenty twenty six, so andaroo should arrive on time.
+  phones:     DH AH0 M IY1 T IH0 NG W IH1 L S T AA1 R T AE1 T T EH1 N F AO1 R T IY0 F AY1 V EY1 EH1 M AA1 N T W EH1 L F TH N OW0 V EH1 M B ER0 T W EH1 N T IY0 T W EH1 N T IY0 S IH1 K S sp S OW1 AE0 N D AA1 R OW0 SH UH1 D ER0 AY1 V AA1 N T AY1 M
+  durations:  5 3 9 6 6 4 9 4 6 4 8 8 9 5 9 6 8 3 5 6 8 2 4 9 4 12 14 9 9 6 9 5 7 4 3 8 3 11 4 8 4 3 3 8 4 6 13 3 3 5 5 3 4 2 3 3 3 7 11 5 8 11 28 9 9 7 5 4 4 5 4 14 4 6 7 14 8 5 7 3 8 11
+  seconds:    6.28

@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FastSpeech 2 Technical Report</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm; }
+  body { font-family: "Segoe UI", "Nirmala UI", sans-serif; font-size: 10pt; line-height: 1.42; color: #111; }
+  h1 { font-size: 18pt; margin: 0 0 2px; }
+  h2 { font-size: 13pt; border-bottom: 1px solid #999; padding-bottom: 2px; margin: 18px 0 6px; page-break-after: avoid; }
+  h3 { font-size: 11pt; margin: 12px 0 4px; page-break-after: avoid; }
+  p, li { margin: 3px 0; }
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 8px; font-size: 9pt; page-break-inside: avoid; }
+  th, td { border: 1px solid #bbb; padding: 3px 5px; text-align: left; vertical-align: top; }
+  th { background: #eef2f6; }
+  code, .mono { font-family: Consolas, monospace; font-size: 8.6pt; }
+  pre { font-family: Consolas, monospace; font-size: 8.4pt; background: #f5f5f5; padding: 6px 8px; white-space: pre-wrap; page-break-inside: avoid; }
+  figure { margin: 8px 0; page-break-inside: avoid; text-align: center; }
+  figure img { width: 100%; }
+  figcaption { font-size: 8.6pt; color: #444; }
+  .te { font-family: "Nirmala UI", sans-serif; }
+  .sub { color: #444; margin-bottom: 10px; }
+  .two { display: flex; gap: 8px; } .two figure { flex: 1; }
+</style>
+</head>
+<body>
+
+<h1>FastSpeech 2 Text-to-Speech for English and Telugu</h1>
+<div class="sub">Technical report: implementation, training and analysis of two FastSpeech 2 models (English trained on Svarah, Telugu trained on IndicTTS Telugu)<br>
+Reference implementation: <span class="mono">github.com/ming024/FastSpeech2</span> &middot; Paper: Ren et al., <i>FastSpeech 2: Fast and High-Quality End-to-End Text to Speech</i>, ICLR 2021</div>
+
+<h2>1. Implementation approach</h2>
+<p>Both models start from ming024's PyTorch FastSpeech 2. The architecture is unchanged; the changes are in the data pipeline, the text frontends and the inference/plotting code. The two languages share one copy of the modified code (<span class="mono">project/FastSpeech2/</span>). Each language folder (<span class="mono">English/</span>, <span class="mono">Telugu/</span>) has its own <span class="mono">config.yaml</span>, plus thin <span class="mono">preprocess.py</span>, <span class="mono">train.py</span> and <span class="mono">inference.py</span> scripts that call that shared code with the language's config. The two models are trained completely separately: they have separate vocabularies, statistics, speaker tables and checkpoints.</p>
+
+<h3>1.1 Architecture components used from the reference implementation</h3>
+<table>
+<tr><th>Component</th><th>Configuration (identical for both languages)</th></tr>
+<tr><td>Phoneme embedding + encoder</td><td>4 feed-forward Transformer blocks, hidden 256, 2 attention heads, conv filter 1024, kernel sizes [9, 1], dropout 0.2</td></tr>
+<tr><td>Variance adaptor</td><td>Duration, pitch and energy predictors (each 2 &times; Conv1D with filter 256 and kernel 3, then LayerNorm, dropout 0.5, and a linear layer). Length regulator expands phonemes by their durations. Pitch and energy are <b>phoneme-level</b> and z-normalized, quantized into 256 linear bins and embedded.</td></tr>
+<tr><td>Mel decoder + PostNet</td><td>6 FFT blocks (hidden 256), linear projection to 80 mel bins, 5-layer convolutional PostNet</td></tr>
+<tr><td>Speaker embedding</td><td>Enabled (<span class="mono">multi_speaker: True</span>): 115 speaker profiles for English, 2 speakers for Telugu</td></tr>
+<tr><td>Vocoder</td><td>Pretrained HiFi-GAN "universal" generator shipped with ming024 (not fine-tuned)</td></tr>
+<tr><td>Loss</td><td>MAE on the mel output before and after the PostNet; MSE on pitch, energy and log-duration (as in ming024)</td></tr>
+</table>
+
+<h3>1.2 Modifications to ming024/FastSpeech2</h3>
+<table>
+<tr><th>File</th><th>Change</th><th>Applies to</th></tr>
+<tr><td><span class="mono">text/telugu.py</span> (new)</td><td>Rule-based Telugu grapheme-to-phoneme (G2P) converter. Each consonant letter carries an inherent /a/ unless it is followed by a vowel sign (matra) or a virama (్). Anusvara (ం) takes the place of articulation of the next consonant (ng / ny / nn / n, otherwise m). Visarga becomes h. Gemination comes out naturally as a repeated phone (ట్ట becomes tt tt). Numbers, times (10:45) and ordinals (12వ) are expanded with <span class="mono">num2words(lang="te")</span>. The output is a set of 46 phones.</td><td>Telugu</td></tr>
+<tr><td><span class="mono">text/symbols.py</span></td><td>Adds the Telugu phones as <span class="mono">@</span>-prefixed symbols next to ARPAbet</td><td>Telugu</td></tr>
+<tr><td><span class="mono">preprocessor/hf_corpus.py</span>, <span class="mono">svarah.py</span>, <span class="mono">telugu.py</span> (new); <span class="mono">prepare_align.py</span></td><td>Loaders that stream the HuggingFace corpora, filter clips by duration, resample them to 22,050 Hz, subsample a fixed number of hours (seed 1234), and write MFA-ready <span class="mono">wav</span>/<span class="mono">.lab</span> pairs. Svarah has no speaker column, so the speaker ID is a hash of the speaker-metadata tuple, and its <span class="mono">audio_filepath</span> column is renamed per item. The Telugu loader balances the two speakers and writes the MFA lexicon using the G2P.</td><td>Both</td></tr>
+<tr><td><span class="mono">preprocessor/preprocessor.py</span></td><td>Train/validation split by audio duration (<span class="mono">val_hours: 1.0</span>) instead of a fixed utterance count. Reads MFA 3.x TextGrids, which leave silences unlabeled. Skips utterances with no alignment, where the original code reused stale pitch arrays. Reads text as UTF-8.</td><td>Both</td></tr>
+<tr><td><span class="mono">lang_runner.py</span> (new)</td><td>Entry points for every stage. The English frontend runs <span class="mono">g2p_en</span> on the whole sentence, which lets its POS tagger choose the noun or verb stress of homographs; ming024 looks up one word at a time. It also expands times, dates and "AM/PM". It writes the audio, the variance-adaptor plots (with predictions de-normalized to Hz and energy units), the loss plots from the TensorBoard logs, and a phoneme and duration log.</td><td>Both</td></tr>
+<tr><td><span class="mono">dataset.py</span></td><td>In-memory sample cache (about 0.5 GB per language). On the training disk each <span class="mono">np.load</span> cost about 9 ms, which left the GPU idle. Training went from about 0.8 to about 2.3 steps/s.</td><td>Both</td></tr>
+<tr><td><span class="mono">utils/tools.py</span></td><td>Casts energy to float before logging to TensorBoard, which fixes a dtype crash at validation.</td><td>Both</td></tr>
+<tr><td><span class="mono">audio/stft.py</span>, <span class="mono">audio/audio_processing.py</span>, <span class="mono">utils/model.py</span></td><td>Compatibility with librosa &ge; 0.10 (keyword-only arguments) and torch &ge; 2.6 (<span class="mono">weights_only</span>)</td><td>Both</td></tr>
+<tr><td><span class="mono">config.yaml</span> (per language)</td><td>Combines ming024's preprocess, model and train YAML files, and adds the MFA commands (each language with its own temp directory) and the test sentences</td><td>Both</td></tr>
+</table>
+
+<h2>2. Datasets, preprocessing and training configuration</h2>
+<h3>2.1 Selection and subsampling</h3>
+<table>
+<tr><th></th><th>English: Svarah (<span class="mono">ai4bharat/Svarah</span>)</th><th>Telugu: IndicTTS (<span class="mono">SPRINGLab/IndicTTS_Telugu</span>)</th></tr>
+<tr><td>Corpus</td><td>Indian-accented English with about 117 speakers from many L1 backgrounds. 16 kHz, a single "test" split.</td><td>Studio TTS recordings from 2 speakers (one female, one male), 48 kHz</td></tr>
+<tr><td>Clip filter</td><td>1.5&ndash;10 s</td><td>1&ndash;11 s (the corpus contains clips up to 152 s; 11 s is about 950 frames, under <span class="mono">max_seq_len</span> = 1000)</td></tr>
+<tr><td>Subsampling</td><td>Random utterances (seed 1234) until 6.0 h: 4,308 clips, 115 speaker profiles</td><td>Random utterances, capped at 3.5 h per speaker. Only 5.39 h (3,136 clips) passed the duration filter.</td></tr>
+<tr><td>Resampling</td><td>16 kHz to 22,050 Hz (<span class="mono">mel_fmax</span> = 8 kHz, which is Svarah's Nyquist frequency)</td><td>48 kHz to 22,050 Hz</td></tr>
+<tr><td>Alignment (MFA 3.4.3)</td><td>Pretrained <span class="mono">english_us_arpa</span> acoustic model and dictionary. 4,283 of 4,308 clips aligned.</td><td>No pretrained Telugu model was usable, so <span class="mono">mfa train</span> trained one on this corpus with the G2P lexicon and exported the alignments. 3,117 of 3,136 clips aligned.</td></tr>
+<tr><td>After silence trimming</td><td>5.32 h</td><td>4.43 h</td></tr>
+<tr><td><b>Train / val</b></td><td><b>3,480 utts / 4.32 h &nbsp;|&nbsp; 790 utts / 1.00 h</b></td><td><b>2,443 utts / 3.43 h &nbsp;|&nbsp; 674 utts / 1.00 h</b></td></tr>
+<tr><td>Speakers in split</td><td>115 in train; 111 of them also appear in val (utterance-level split)</td><td>Train: female 774, male 1,669 utts. Val: 225 / 449.</td></tr>
+</table>
+<p><b>No overlap:</b> the split is made per utterance after shuffling, and each clip ID goes to exactly one of <span class="mono">train.txt</span> or <span class="mono">val.txt</span> (verified: 0 shared IDs, 0 missing feature files). The difference between the hours selected and the hours used comes from trimming leading and trailing silence to the MFA boundaries (ming024's standard behaviour) and from the clips that failed to align. Telugu ended up below the 5 h training target because the corpus has only about 8.7 h in total, and much of it consists of very long clips that the duration filter drops.</p>
+
+<h3>2.2 Features</h3>
+<p>80-band log-mel spectrograms (FFT/window 1024, hop 256, so one frame = 11.6 ms) and F0 from pyworld (DIO + StoneMask), linearly interpolated over unvoiced frames. Energy is the L2 norm of each STFT frame. Pitch, energy and duration (from the MFA alignments) are averaged per phoneme, then pitch and energy are z-normalized. Mean F0 is 179 Hz (&sigma; 57) for English and 191 Hz (&sigma; 44) for Telugu.</p>
+
+<h3>2.3 Training configuration</h3>
+<table>
+<tr><th>Setting</th><th>Value (both languages)</th></tr>
+<tr><td>Optimizer</td><td>Adam with &beta; = (0.9, 0.98), &epsilon; = 1e-9, gradient clipping at 1.0, batch size 16 (ming024 groups 4 batches per loader fetch)</td></tr>
+<tr><td>Learning rate</td><td>Noam schedule with 4,000 warm-up steps (peak about 9.9e-4), multiplied by 0.3 at steps 25k, 32k and 37k. ming024's 300k/400k/500k steps were scaled down to fit a 40k-step budget.</td></tr>
+<tr><td>Steps</td><td>40,000 (about 184 epochs for English, 263 for Telugu). Validation every 1k steps; checkpoint every 5k.</td></tr>
+<tr><td>Hardware / time</td><td>One RTX 3050 Laptop GPU (6 GB). English took 5 h 16 min and Telugu 6 h 42 min (Telugu clips are longer, and the GPU was thermally limited at about 86 &deg;C).</td></tr>
+<tr><td>Checkpoint used for results</td><td><b>English: 40k. Telugu: 25k.</b> Both were chosen by listening to 10k, 25k and 40k (all three are in <span class="mono">Results/&lt;Lang&gt;/checkpoint_comparison/</span>).</td></tr>
+<tr><td>Inference speaker</td><td>English: <span class="mono">MNepali_d270fa</span> (the speaker profile with the most training utterances). Telugu: <span class="mono">female</span>.</td></tr>
+</table>
+
+<h2>3. Training and validation loss</h2>
+<div class="two">
+<figure><img src="../Results/English/training_loss.png"><figcaption>English: training loss</figcaption></figure>
+<figure><img src="../Results/English/validation_loss.png"><figcaption>English: validation loss</figcaption></figure>
+</div>
+<div class="two">
+<figure><img src="../Results/Telugu/training_loss.png"><figcaption>Telugu: training loss</figcaption></figure>
+<figure><img src="../Results/Telugu/validation_loss.png"><figcaption>Telugu: validation loss</figcaption></figure>
+</div>
+<table>
+<tr><th rowspan="2">Step</th><th colspan="3">English total (mel)</th><th colspan="3">Telugu total (mel)</th></tr>
+<tr><th>train</th><th>val</th><th>val pitch / energy / dur</th><th>train</th><th>val</th><th>val pitch / energy / dur</th></tr>
+<tr><td>1k</td><td>&ndash;</td><td>2.79 (0.86)</td><td>0.41 / 0.40 / 0.23</td><td>&ndash;</td><td>2.34 (0.77)</td><td>0.51 / 0.23 / 0.066</td></tr>
+<tr><td>10k</td><td>1.34 (0.58)</td><td><b>2.55 (0.75)</b></td><td>0.42 / 0.40 / 0.24</td><td>0.89 (0.39)</td><td>1.99 (0.60)</td><td>0.50 / 0.21 / 0.061</td></tr>
+<tr><td>25k</td><td>1.01 (0.46)</td><td>2.59 (0.77)</td><td>0.41 / 0.40 / 0.24</td><td>0.72 (0.34)</td><td>1.99 (0.61)</td><td>0.50 / 0.22 / 0.062</td></tr>
+<tr><td>40k</td><td>0.79 (0.37)</td><td>2.58 (0.77)</td><td>0.41 / 0.40 / 0.24</td><td>0.67 (0.32)</td><td><b>1.98 (0.60)</b></td><td>0.50 / 0.21 / 0.062</td></tr>
+</table>
+<p><b>Convergence.</b> Training loss falls steadily for both models, with visible drops at the learning-rate anneals (25k, 32k, 37k). Validation loss falls quickly during warm-up and reaches its minimum around <b>8&ndash;10k steps</b> for both languages, then stays flat. There is no divergence or NaN, and the only instability is the noisy first 5k steps of warm-up. The English validation pitch and energy losses spike at 2k&ndash;5k, as the predictors move past the trivial mean prediction.</p>
+<p><b>Overfitting.</b> Training loss keeps falling (English 1.34 to 0.79, Telugu 0.89 to 0.67) while validation loss stays flat. English mel validation loss rises slightly after 10k (0.751 to 0.766), and its duration validation loss rises slightly from 2k. This is mild overfitting, which is expected with only 3.4&ndash;4.3 h of data. The largest train/val gaps are pitch and energy (training pitch loss about 0.02 vs validation about 0.4&ndash;0.5): the predictors memorize the training prosody but generalize only to the average contour. Early stopping at about 10k would have given the same validation loss in a quarter of the time. In listening tests, however, the later checkpoints sounded cleaner (English 40k, Telugu 25k were preferred), which matches the well-known observation that mel L1 is only weakly correlated with perceived quality.</p>
+<p><b>English vs Telugu.</b> Telugu reaches clearly lower losses (validation mel 0.60 vs 0.77, duration 0.06 vs 0.24, energy 0.21 vs 0.40). Telugu is two speakers reading a script in a studio. English is 115 speakers with different L1 accents, recording conditions and speaking rates, so it has much more variance that the model cannot explain from text alone. Telugu pitch loss is higher (0.50 vs 0.41) because it mixes a female and a male voice with very different F0 ranges.</p>
+
+<h2>4. Generated speech and pronunciation</h2>
+<p>Audio is in <span class="mono">Results/&lt;Lang&gt;/test_generated_audios/</span>. The exact input, the normalized text, the phoneme sequence and the predicted durations for every sentence are in <span class="mono">test_sentences_phonemes.txt</span>. All sentence texts were passed to the model exactly as given, including the "rhyth m" split in E3 and the "అడ విలో" split in T3.</p>
+
+<h3>4.1 English</h3>
+<table>
+<tr><th>ID</th><th>Frontend output / pronunciation</th><th>Observations</th></tr>
+<tr><td>E1 (5.50 s)</td><td>"antidisestablishmentarianism" becomes <span class="mono">AE2 N T AY0 D IH0 S AH0 S T AE2 B L IH0 SH M AH0 N T EH1 R IY0 AH0 N IH0 Z AH0 M</span> (dictionary pronunciation, 28 phones)</td><td>The 28-phone word is synthesized without skipping or repeating phones, because the duration-based length regulator cannot "lose attention" the way Tacotron-style models can. Durations stay at about 3&ndash;6 frames per phone, so the long word is read at the same rate as the rest of the sentence with no extra effort on it. The final <span class="mono">Z</span> is lengthened (17 frames).</td></tr>
+<tr><td>E2a / E2b</td><td>"conduct": E2a gives <span class="mono">K AA1 N D AH0 K T</span> (noun, stress on the first syllable); E2b gives <span class="mono">K AA0 N D AH1 K T</span> (verb, stress on the second syllable)</td><td>The homograph is resolved correctly in the <i>input</i>, because g2p_en tags "conduct" as a noun after "orchestra's" and as a verb after "will". The acoustic realization of the difference is weak, though. In E2a the stressed AA1 is short (4 frames) and its F0 (145 Hz) is below the preceding K (170 Hz). In E2b the stressed AH1 is also 4 frames and about 120 Hz. The model learned little lexical-stress prominence from Svarah's largely syllable-timed Indian English, so the two "conduct"s sound more alike than they would in native English.</td></tr>
+<tr><td>E3 (2.97 s)</td><td>"rhyth m" becomes <span class="mono">R AY1 DH</span> + <span class="mono">EH1 M</span></td><td><b>Failure case.</b> "rhyth" is out of vocabulary, so g2p_en's neural predictor guesses <span class="mono">R AY1 DH</span> ("rythe"). The isolated "m" is read as the letter name "em". The intended word (/rɪðəm/) is not produced. The model also stretches this unfamiliar region (AY1 18 frames, DH 12 frames), which is about 3&times; the sentence average. Better text normalization (rejoining a split token when the joined form is a dictionary word) would fix it.</td></tr>
+<tr><td>E4 (6.32 s)</td><td>Normalized to "...at <i>ten forty five ay em</i> on <i>twelfth November twenty twenty six</i>, so andaroo..."; "andaroo" becomes <span class="mono">AE0 N D AA1 R OW0</span></td><td>The time, the "AM" abbreviation and the date are expanded correctly into spoken words. Without this step ming024 would have dropped the digits. The comma becomes a pause token (<span class="mono">sp</span>, 35 frames = 0.41 s), which gives a natural phrase break. "andaroo" (Telugu for "everyone") is code-mixed. It gets an anglicized guess with stress on the second syllable, and the expected Telugu /ʌndʌruː/ with a long final vowel is only approximated.</td></tr>
+</table>
+
+<h3>4.2 Telugu</h3>
+<table>
+<tr><th>ID</th><th>Frontend output / pronunciation</th><th>Observations</th></tr>
+<tr><td>T1 (5.29 s)</td><td class="te">న్యూరోఫార్మకోలాజికల్ becomes <span class="mono">n y uu r oo ph aa r m a k oo l aa j i k a l</span></td><td>The English loanword written in Telugu script is converted letter by letter, which is correct for this script: the conjunct న్యూ becomes n y uu, and the final ల్ (with virama) has no inherent vowel. Durations are even (4&ndash;12 frames), and the long vowels uu/oo/aa get 10&ndash;12 frames against 4&ndash;7 for short ones. ఫ is rendered as aspirated <span class="mono">ph</span> rather than English /f/, which matches common Telugu pronunciation.</td></tr>
+<tr><td>T2a / T2b</td><td class="te">పట్టు becomes <span class="mono">p a tt tt u</span> in both</td><td>పట్టు ("grip" in T2a, "silk" in T2b) is a homograph with the <i>same</i> pronunciation, so identical phonemes are correct. The geminate is two <span class="mono">tt</span> tokens with a combined closure of 11&ndash;12 frames, against 5 frames for a single retroflex (the dd of తాడు). Gemination is clearly realized. The word gets the same durations in both sentences (p a tt tt u = 7 5 7 4 5 and 9 4 8 4 5). Any difference in meaning would only come from sentence-level prosody, which the model does not model.</td></tr>
+<tr><td>T3 (2.30 s)</td><td class="te">అడ విలో becomes <span class="mono">a dd a</span> + <span class="mono">v i l oo</span>; నిశ్శబ్దంగా becomes <span class="mono">n i sh sh a b d a ng g aa</span></td><td>Unlike E3, the split here is harmless: the Telugu frontend inserts no boundary between words, so the phone string is identical to the correctly written అడవిలో and the word is read as one unit. The geminate శ్శ gives 17 frames of frication, and the anusvara before గ correctly becomes velar <span class="mono">ng</span>.</td></tr>
+<tr><td>T4 (8.95 s)</td><td>Normalized: <span class="te">రెండు వేల ఇరవై ఆరు నవంబర్ పన్నెండవ తేదీ ఉదయం పది నలభై అయిదు గంటలకు ...</span></td><td>The year, the ordinal 12వ (which becomes పన్నెండవ, merging the number's final ు with the suffix) and the time 10:45 are all expanded into spoken Telugu. num2words' literary form వేయిల is replaced by the spoken form వేల. The comma gives a 44-frame (0.51 s) pause. This is the longest sentence (122 phones), and there is no rate drift across it.</td></tr>
+</table>
+<p><b>Overall quality.</b> Both models produce intelligible speech, and every test sentence was synthesized without skipped or repeated words. The main quality limits come from the vocoder and the data, not from the acoustic model. The universal HiFi-GAN was not fine-tuned on either corpus, so it adds slight buzz on some voiced segments. English is band-limited to 8 kHz because Svarah is 16 kHz audio, and its prosody is flatter, averaged over 115 accents. Telugu, trained on clean studio data from one speaker per gender, sounds more consistent.</p>
+
+<h2>5. Variance-adaptor analysis</h2>
+<p>For every test sentence there are three bar charts (<span class="mono">variance_adaptor_plots/{duration,pitch,energy}/</span>): predicted duration in mel frames, F0 in Hz and energy, one bar per phoneme. Pitch and energy are phoneme-level predictions de-normalized with the training statistics. Because F0 is interpolated over unvoiced frames during preprocessing, voiceless consonants still get an F0 value close to that of their neighbours.</p>
+
+<div class="two">
+<figure><img src="../Results/English/variance_adaptor_plots/pitch/E2a.png"><figcaption>E2a pitch: early peak in "orchestra's", then gradual declination to about 113 Hz</figcaption></figure>
+<figure><img src="../Results/English/variance_adaptor_plots/pitch/E2b.png"><figcaption>E2b pitch: peak on "researchers", declination to about 107 Hz; no peak on the verb-stressed AH1</figcaption></figure>
+</div>
+<figure><img src="../Results/English/variance_adaptor_plots/duration/E4.png"><figcaption>E4 duration: the <span class="mono">sp</span> pause at the comma (35 frames), and lengthening of phrase-final and stressed vowels (AY1 in "five", final M)</figcaption></figure>
+<figure><img src="../Results/English/variance_adaptor_plots/energy/E1.png"><figcaption>E1 energy: vowels high (AE2, IH0 &gt; 130), voiceless stops and fricatives low (T, S, SH, P &lt; 35), so the sonority alternation is reproduced phone by phone</figcaption></figure>
+<div class="two">
+<figure><img src="../Results/Telugu/variance_adaptor_plots/pitch/T2a.png"><figcaption>T2a pitch: high onset (peak 317 Hz on తాడు) and steady declination to about 165 Hz</figcaption></figure>
+<figure><img src="../Results/Telugu/variance_adaptor_plots/energy/T3.png"><figcaption>T3 energy: dips on p, sh sh, b d, c, and high values on vowels</figcaption></figure>
+</div>
+<figure><img src="../Results/Telugu/variance_adaptor_plots/pitch/T1.png"><figcaption>T1 pitch: a local F0 rise at the start of each word (nyuuro, parishoodhana, nuutana, prabhaavaanni), then overall declination from 303 to 156 Hz</figcaption></figure>
+
+<table>
+<tr><th>ID</th><th>Duration</th><th>Pitch (F0)</th><th>Energy</th></tr>
+<tr><td>E1</td><td>Even, 3&ndash;6 frames per phone across the long word. Lengthened final Z (17).</td><td>Starts at about 140&ndash;170 Hz and falls gradually. There are small local peaks on primary-stressed vowels (EH1, IY1), but no pitch prominence specific to the long word.</td><td>Clear vowel/consonant alternation (vowels 90&ndash;137, voiceless consonants 12&ndash;40)</td></tr>
+<tr><td>E2a</td><td>Phrase-final S of "audience" is 18 frames. The stressed AA1 of "conduct" is short (4).</td><td>Peak about 170 Hz in "orchestra's"/"conduct" (on the consonants K and T), then declination to 113 Hz. This is a declarative contour.</td><td>Highest on AO1, AA1 and EY1. Final S is low.</td></tr>
+<tr><td>E2b</td><td>CH in "researchers" is long (12), and K in "conduct" is 14 frames (strong closure before T).</td><td>Starts higher (178 Hz on "researchers"), with no peak on the stressed AH1 (about 120 Hz). Ends at 107 Hz.</td><td>Similar pattern. The stress difference between E2a and E2b is not visible in energy either.</td></tr>
+<tr><td>E3</td><td>Anomalous lengthening of the mis-guessed "rhyth" (AY1 18, DH 12). Final IY0 is 24 frames.</td><td>Fairly flat at 110&ndash;150 Hz, with small peaks on EH1 M ("em") and EY1 ("changed").</td><td>Normal alternation. The spurious "em" gets full vowel energy, so it is clearly audible as an extra syllable.</td></tr>
+<tr><td>E4</td><td>A 35-frame <span class="mono">sp</span> at the comma. Lengthened AY1 ("five", 17) and final M (15). Number words at about 3 frames per phone are spoken quickly.</td><td>A declination reset after the pause: the second clause starts higher again, which is typical of a two-phrase sentence.</td><td>Drops to the minimum on <span class="mono">sp</span>.</td></tr>
+<tr><td>T1</td><td>Long vowels (uu, oo, aa) are 10&ndash;12 frames against 4&ndash;7 for short ones, so phonemic vowel length is learned. Final u is 12.</td><td>A rise at the start of each word, then overall declination (303 to 156 Hz). This fits Telugu's initial-syllable prominence.</td><td>Vowels are high, with dips on the aspirates and fricatives (ph, sh, ss).</td></tr>
+<tr><td>T2a</td><td>The long aa of తాడు is 15 frames against 5 for short vowels. The geminate tt tt totals 11.</td><td>Peaks at 317 Hz on తాడు, then declines to about 165 Hz. బలంగా gets a small rise.</td><td>Low on the stops (t, p, tt, c, b), high on aa/ai.</td></tr>
+<tr><td>T2b</td><td>Word-initial ఆ (aa) is 13 frames, geminate tt tt is 12, and final i is 15 (phrase-final lengthening).</td><td>A contour similar to T2a: the sentence starts high and declines. పట్టు gets the same local contour as in T2a.</td><td>Similar to T2a.</td></tr>
+<tr><td>T3</td><td>The geminate sh sh is 17 frames in total, final i 15, and short vowels 4&ndash;6.</td><td>Declination with a small rise on నిశ్శబ్దంగా. The space inside అడ విలో produces no pitch reset.</td><td>Very low on p, sh sh and c (7&ndash;13), and vowels about 100. A textbook pattern.</td></tr>
+<tr><td>T4</td><td>Initial ii is 16 frames, the pause at the comma is 44 frames, and the rate is constant across the 122 phones.</td><td>Repeated mild rises at word onsets and a declination reset after the comma (rising to about 265 Hz on సమయానికి).</td><td>Drops sharply at <span class="mono">sp</span> and stays steady elsewhere.</td></tr>
+</table>
+<p><b>Common patterns.</b> (1) <i>Duration</i>: phrase-final lengthening and lengthening at pauses appear in both languages. Telugu duration additionally encodes phonemic vowel length and gemination, which is the reason for its very low duration loss: Telugu timing is predictable from the script. (2) <i>Pitch</i>: both models produce declarative declination, with a reset after a comma pause. English shows almost no lexical-stress pitch accent. Telugu shows word-initial rises. Absolute F0 follows the selected speaker (English male about 110&ndash;170 Hz, Telugu female about 150&ndash;320 Hz). (3) <i>Energy</i>: in both languages it follows sonority (vowels &gt; nasals and liquids &gt; voiced stops &gt; voiceless obstruents), so energy is largely predictable from phone identity.</p>
+
+<h2>6. English vs Telugu: comparison, limitations and improvements</h2>
+<table>
+<tr><th>Aspect</th><th>English (Svarah)</th><th>Telugu (IndicTTS)</th></tr>
+<tr><td>Data</td><td>4.32 h, 115 accented speakers with mixed recording quality, 16 kHz source</td><td>3.43 h (below the 5 h target, because the corpus is small after filtering), 2 studio speakers, 48 kHz source</td></tr>
+<tr><td>Frontend</td><td>Mature: CMUdict plus a neural OOV predictor and POS-aware homograph handling. It fails on split or garbled tokens (E3) and on code-mixed words (E4 "andaroo").</td><td>Rule-based G2P. It is accurate because the script is phonemic, but it has no schwa or vowel reduction, no stress, and no handling of English words in Latin script.</td></tr>
+<tr><td>Validation loss</td><td>2.58 (mel 0.77)</td><td>1.98 (mel 0.60)</td></tr>
+<tr><td>Prosody</td><td>Flat, averaged over many accents. Weak lexical stress.</td><td>Clear vowel-length and gemination contrasts. Natural declination.</td></tr>
+</table>
+<p><b>Failures observed on the test sentences.</b></p>
+<ul>
+<li>E3: "rhyth m" was mispronounced, with an extra syllable "em".</li>
+<li>E2: the stress difference in "conduct" is present in the input but barely realized in the audio.</li>
+<li>E4: the code-mixed "andaroo" is anglicized.</li>
+<li>T2: the meaning difference cannot be expressed. This is correct here, since the pronunciation is the same, but the frontend would also fail on Telugu homographs that <i>are</i> pronounced differently.</li>
+<li>Both models: there is mild overfitting after about 10k steps, and the pitch and energy predictors generalize only to average contours.</li>
+</ul>
+<p><b>Possible improvements.</b></p>
+<ul>
+<li>Fine-tune HiFi-GAN on each corpus, using ground-truth-aligned mels.</li>
+<li>Use more Telugu data, for example a second Telugu TTS corpus, to reach 5 h.</li>
+<li>Choose a single English speaker or accent group, or condition on accent, to sharpen prosody.</li>
+<li>Use early stopping or stronger regularization, such as higher variance-predictor dropout and SpecAugment-style mel masking.</li>
+<li>Rejoin split tokens in the text normalizer when the joined form is a dictionary word (E3).</li>
+<li>Add a language-ID-aware frontend for code-mixed words (E4).</li>
+<li>Use frame-level pitch prediction (a continuous-wavelet-transform pitch spectrogram, as in the paper) for richer F0 contours.</li>
+</ul>
+
+<h2>7. Reproducibility</h2>
+<p><b>Software.</b> Python 3.11.9, torch 2.5.1+cu121, torchaudio 2.5.1, librosa 0.11.0, numpy 2.4.6, scipy 1.17.1, pyworld 0.3.5, tgt 1.5, g2p-en 2.1.0, num2words 0.5.14, datasets 5.1.0, matplotlib 3.11.2, tensorboard 2.21.0. Montreal Forced Aligner 3.4.3 runs in a separate conda environment named <span class="mono">mfa</span>. The full list is in <span class="mono">requirements.txt</span>. Hardware: an RTX 3050 Laptop GPU (6 GB) on Windows 11.</p>
+<p><b>Configuration files.</b> <span class="mono">English/config.yaml</span> and <span class="mono">Telugu/config.yaml</span> contain the preprocessing, model and training settings, the MFA commands and the test sentences. All random selection uses seed 1234.</p>
+<pre>
+# setup
+python -m venv .venv &amp;&amp; .venv\Scripts\activate
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+conda create -n mfa -c conda-forge montreal-forced-aligner     # aligner
+hf auth login                                                   # Svarah is gated: accept its terms first
+# unzip FastSpeech2/hifigan/generator_universal.pth.tar.zip in place
+
+# per language (identical commands for Telugu/)
+python English/preprocess.py                      # prepare -&gt; MFA align -&gt; features (or --stage prepare|align|features)
+python English/train.py                           # 40k steps; resume with --restore_step N
+tensorboard --logdir English/logs                 # live loss curves and validation audio
+python English/inference.py --restore_step 40000  # Telugu: --restore_step 25000
+</pre>
+<p><span class="mono">inference.py</span> writes the test audio, the variance-adaptor plots, the loss plots and <span class="mono">test_sentences_phonemes.txt</span> to <span class="mono">Results/&lt;Lang&gt;/</span>. A different speaker can be chosen with <span class="mono">--speaker &lt;name&gt;</span>, using any name from <span class="mono">speakers.json</span>.</p>
+
+</body>
+</html>
